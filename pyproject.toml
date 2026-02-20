@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "DAWpy"
+version = "2026.2.20.0"
+dependencies = [
+    "numpy>2.4.2"
+]
+requires-python = ">=3.12"
+authors = [
+    {name = "Mithran Mohanraj", email = "mithran.mohanraj@gmail.com"}
+]
+maintainers = [
+    {name = "Mithran Mohanraj", email = "mithran.mohanraj@gmail.com"}
+]
+description = "A Digital Audio Workstation in your CLI."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
