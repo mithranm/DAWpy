@@ -1,41 +1,91 @@
-# src/dawpy/timeline.py
+import numpy as np
+from dawpy.tone import Tone
 
-class Time:
+
+class Timeline:
+    """Sequences musical tones and renders them to audio.
+
+    A Timeline holds a list of Tone objects and renders them sequentially
+    into a single audio waveform. Think of it as a track in a DAW where you
+    place notes one after another.
     """
-    Represents a musical position or duration.
-    Assumes standard 4/4 time signature for now (4 beats per bar).
-    """
-    def __init__(self, bar=1, beat=1.0):
-        # DAWs traditionally start counting at Bar 1, Beat 1
-        self.bar = bar
-        self.beat = beat
+
+    def __init__(self, bpm: int = 120, samplerate: int = 44100):
+        """Initialize a new timeline.
+
+        Args:
+            bpm: Tempo in beats per minute. Default is 120 (standard tempo).
+                Must be positive.
+            samplerate: Audio sample rate in Hz. Default is 44100 (CD quality).
+                Common values: 44100, 48000.
+                Must be positive.
+
+        Raises:
+            ValueError: If bpm or samplerate is not positive.
+        """
+        if not isinstance(bpm, int) or bpm <= 0:
+            raise ValueError(f"bpm must be a positive integer, got {bpm}")
+        if not isinstance(samplerate, int) or samplerate <= 0:
+            raise ValueError(f"samplerate must be a positive integer, got {samplerate}")
+
+        self.bpm = bpm
+        self.samplerate = samplerate
+        self.sequence = []  # List to hold Tone objects
+
+    def add_tone(self, tone: Tone) -> None:
+        """Add a tone to the end of the timeline.
+
+        The tone will be placed sequentially after all existing tones.
+
+        Args:
+            tone: A Tone object to add to the sequence.
+
+        Raises:
+            TypeError: If tone is not a Tone object.
+        """
+        if not isinstance(tone, Tone):
+            raise TypeError(f"tone must be a Tone object, got {type(tone).__name__}")
+        self.sequence.append(tone)
+
+    def clear(self) -> None:
+        """Remove all tones from the timeline."""
+        self.sequence = []
+
+    def get_duration_seconds(self) -> float:
+        """Get the total duration of all tones in the timeline.
+
+        Returns:
+            Total duration in seconds. Returns 0.0 if timeline is empty.
+        """
+        if not self.sequence:
+            return 0.0
+
+        total = 0.0
+        for tone in self.sequence:
+            total += tone.get_total_duration_seconds(self.bpm)
+        return total
 
     @property
-    def total_beats(self) -> float:
-        """Converts the Bar/Beat position into a raw beat count from zero."""
-        # Bar 1, Beat 1 = 0.0 total beats
-        # Bar 2, Beat 1 = 4.0 total beats
-        bars_zero_indexed = self.bar - 1
-        beats_zero_indexed = self.beat - 1.0
-        return (bars_zero_indexed * 4.0) + beats_zero_indexed
+    def rendered(self) -> np.ndarray:
+        """Render all tones in the sequence into one audio waveform.
 
-    def __repr__(self):
-        return f"Time(bar={self.bar}, beat={self.beat})"
+        Returns:
+            Audio data as a numpy float32 array. Shape is (num_samples,).
 
+        Raises:
+            ValueError: If the timeline is empty (no tones added).
+        """
+        if not self.sequence:
+            raise ValueError("Cannot render empty timeline. Add tones with add_tone().")
 
-class Project:
-    """
-    The root container for a song. Holds the master BPM and tracks.
-    """
-    def __init__(self, bpm: float = 120.0):
-        self.bpm = bpm
-        self.tracks =[]
+        rendered_chunks = [
+            tone.render(self.bpm, self.samplerate) for tone in self.sequence
+        ]
+        return np.concatenate(rendered_chunks)
 
-    def time_to_seconds(self, t: Time) -> float:
-        """Converts a Musical Time object into Absolute Time (seconds)."""
-        beats_per_second = self.bpm / 60.0
-        return t.total_beats / beats_per_second
-
-    def seconds_to_samples(self, seconds: float, sample_rate: int = 44100) -> int:
-        """Converts Absolute Time into Discrete Time (array index)."""
-        return int(seconds * sample_rate)
+    def __repr__(self) -> str:
+        """Return a string representation of the timeline."""
+        return (
+            f"Timeline(bpm={self.bpm}, samplerate={self.samplerate}, "
+            f"num_tones={len(self.sequence)}, duration={self.get_duration_seconds():.2f}s)"
+        )
