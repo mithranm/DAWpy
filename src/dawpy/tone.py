@@ -28,7 +28,7 @@ class Tone:
 
         Args:
             frequency: Pitch in Hz. Middle C is 261.63 Hz.
-                Range: 20–20000 Hz (human hearing range).
+                Range: 20-20000 Hz (human hearing range).
 
             duration: How long the note plays, in beats.
                 At 120 BPM, 1 beat = 0.5 seconds.
@@ -46,7 +46,7 @@ class Tone:
 
             sustain: Percentage of full volume to hold during the note.
                 0.0 = silent after attack+decay. 1.0 = stay at full volume.
-                Range: 0.0–1.0 (as a ratio, not percent).
+                Range: 0.0-1.0 (as a ratio, not percent).
 
             release: Fade-out time in seconds (after note ends).
                 How long the tail of the sound lasts after the note stops.
@@ -54,11 +54,11 @@ class Tone:
             cutoff: Filter brightness in Hz.
                 Low values (e.g., 2000 Hz) = muffled/dark sound.
                 High values (e.g., 10000 Hz) = bright/clear sound.
-                Range: 20–20000 Hz.
+                Range: 20-20000 Hz.
 
             resonance: Filter emphasis (how much the cutoff frequency "pops").
                 0 = no emphasis (flat). Higher values = boosts sound at cutoff.
-                Range: 0.0+ (typically 0–10).
+                Range: 0.0+ (typically 0-10).
 
         Raises:
             ValueError: If any parameter is out of valid range.
@@ -116,7 +116,7 @@ class Tone:
             errors.append(f"release must be ≥ 0 seconds, got {release}")
 
         if not isinstance(cutoff, (int, float)) or not (20.0 <= cutoff <= 20000.0):
-            errors.append(f"cutoff must be 20–20000 Hz, got {cutoff}")
+            errors.append(f"cutoff must be 20-20000 Hz, got {cutoff}")
 
         if not isinstance(resonance, (int, float)) or resonance < 0.0:
             errors.append(f"resonance must be ≥ 0.0, got {resonance}")
@@ -125,9 +125,10 @@ class Tone:
             raise ValueError("\n".join(errors))
 
     def get_total_duration_seconds(self, bpm: int = 120) -> float:
-        """Get the total time this note takes, from start to silence.
+        """Get the total time this note takes.
 
-        This includes: fade-in + volume drop + sustain + fade-out.
+        The envelope (attack, decay, release) fits within this duration.
+        No extra time is added beyond the specified beat duration.
 
         Args:
             bpm: Tempo in beats per minute (e.g., 120 = standard tempo).
@@ -136,8 +137,7 @@ class Tone:
             Total duration in seconds.
         """
         beat_duration = 60.0 / bpm
-        sustain_duration = self.duration * beat_duration
-        return self.attack + self.decay + sustain_duration + self.release
+        return self.duration * beat_duration
 
     def __repr__(self) -> str:
         return (
@@ -150,6 +150,9 @@ class Tone:
     def render(self, bpm: int = 120, fs: int = 44100) -> np.ndarray:
         """Generate the audio waveform for this note.
 
+        The envelope (attack, decay, sustain, release) is scaled to fit exactly
+        within the specified duration. No extra time is added.
+
         Args:
             bpm: Tempo in beats per minute.
             fs: Sample rate (samples per second). 44100 is standard CD quality.
@@ -161,41 +164,65 @@ class Tone:
 
         # Convert beat duration to seconds
         beat_duration = 60.0 / bpm
-        note_duration_sec = self.duration * beat_duration
-
-        # Total audio length: note + release tail
-        total_duration_sec = note_duration_sec + self.release
+        total_duration_sec = self.duration * beat_duration
         num_samples = int(fs * total_duration_sec)
         t = np.linspace(0, total_duration_sec, num_samples, endpoint=False)
 
         # Generate the sine wave at the note's frequency
         audio = np.sin(2 * np.pi * self.frequency * t)
 
-        # Build the envelope (volume shape over time)
-        a_samples = int(self.attack * fs)
-        d_samples = int(self.decay * fs)
-        r_samples = int(self.release * fs)
+        # Check if envelope times fit within duration. If not, scale them proportionally.
+        envelope_time = self.attack + self.decay + self.release
+        if envelope_time > total_duration_sec:
+            # Scale envelope times proportionally so they fit
+            scale_factor = total_duration_sec / envelope_time
+            attack = self.attack * scale_factor
+            decay = self.decay * scale_factor
+            release = self.release * scale_factor
+        else:
+            attack = self.attack
+            decay = self.decay
+            release = self.release
 
-        # Calculate sustain samples from the total to avoid rounding errors
-        s_samples = num_samples - (a_samples + d_samples + r_samples)
+        # Build ADSR envelope that exactly fills the total duration
+        a_samples = int(attack * fs)
+        d_samples = int(decay * fs)
+        r_samples = int(release * fs)
 
-        if s_samples < 0:
-            s_samples = 0
+        envelope = np.zeros(num_samples, dtype=float)
+        idx = 0
 
-        envelope = np.concatenate(
-            [
-                np.linspace(0, 1, a_samples),  # Attack: fade in
-                np.linspace(1, self.sustain, d_samples),  # Decay: drop to sustain level
-                np.full(s_samples, self.sustain),  # Sustain: hold steady
-                np.linspace(self.sustain, 0, r_samples),  # Release: fade out
-            ]
-        )
+        # Attack (0 -> 1)
+        if a_samples > 0 and idx < num_samples:
+            end = min(idx + a_samples, num_samples)
+            envelope[idx:end] = np.linspace(0.0, 1.0, end - idx)
+            idx = end
 
-        # Apply low-pass filter (to darken/brighten the sound)
+        # Decay (1 -> sustain)
+        if d_samples > 0 and idx < num_samples:
+            end = min(idx + d_samples, num_samples)
+            envelope[idx:end] = np.linspace(1.0, float(self.sustain), end - idx)
+            idx = end
+
+        # Sustain (hold sustain level), reserve space for release at the end
+        if idx < num_samples:
+            sustain_end = max(idx, num_samples - r_samples)
+            if sustain_end > idx:
+                envelope[idx:sustain_end] = float(self.sustain)
+                idx = sustain_end
+
+        # Release (current level -> 0) fills until the end
+        if idx < num_samples:
+            end = num_samples
+            start_level = envelope[idx - 1] if idx > 0 else float(self.sustain)
+            envelope[idx:end] = np.linspace(start_level, 0.0, end - idx)
+
+        # Apply a basic low-pass filter (Butterworth order 2). Keep filtering
+        # simple — resonance is accepted as a parameter but not used to vary
+        # the filter order here, keeping behavior predictable.
         nyquist = fs / 2
         normalized_cutoff = np.clip(self.cutoff / nyquist, 0.001, 0.999)
-        order = max(2, min(8, int(2 + self.resonance * 1.5)))
-        sos = butter(order, normalized_cutoff, btype="low", output="sos")
+        sos = butter(2, normalized_cutoff, btype="low", output="sos")
         audio = np.asarray(sosfilt(sos, audio))
 
         # Apply volume and envelope

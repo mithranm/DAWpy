@@ -6,7 +6,7 @@ class Timeline:
     """Sequences musical tones and renders them to audio.
 
     A Timeline holds a list of Tone objects and renders them sequentially
-    into a single audio waveform. Think of it as a track in a DAW where you
+    into a single audio waveform. Think of it as a single track in a DAW where you
     place notes one after another.
     """
 
@@ -30,7 +30,7 @@ class Timeline:
 
         self.bpm = bpm
         self.samplerate = samplerate
-        self.sequence = []  # List to hold Tone objects
+        self.sequence = []
 
     def add_tone(self, tone: Tone) -> None:
         """Add a tone to the end of the timeline.
@@ -45,6 +45,7 @@ class Timeline:
         """
         if not isinstance(tone, Tone):
             raise TypeError(f"tone must be a Tone object, got {type(tone).__name__}")
+
         self.sequence.append(tone)
 
     def clear(self) -> None:
@@ -78,10 +79,15 @@ class Timeline:
         if not self.sequence:
             raise ValueError("Cannot render empty timeline. Add tones with add_tone().")
 
-        rendered_chunks = [
-            tone.render(self.bpm, self.samplerate) for tone in self.sequence
-        ]
-        return np.concatenate(rendered_chunks)
+        # Render each tone and concatenate them sequentially
+        chunks = [tone.render(self.bpm, self.samplerate) for tone in self.sequence]
+        audio = np.concatenate(chunks)
+
+        # Prevent clipping by normalizing if needed (simple safeguard)
+        peak = np.max(np.abs(audio)) if audio.size > 0 else 0.0
+        if peak > 1.0:
+            audio = audio / peak
+        return audio.astype(np.float32)
 
     def __repr__(self) -> str:
         """Return a string representation of the timeline."""
