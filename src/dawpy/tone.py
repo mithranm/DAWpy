@@ -1,7 +1,8 @@
 import numpy as np
+from dawpy.renderable import Renderable
 
 
-class Tone:
+class Tone(Renderable):
     """A musical note with volume controls and envelope shaping.
 
     Think of a Tone as a single note you play on an instrument. Just like a piano
@@ -23,6 +24,9 @@ class Tone:
         release: float = 0.5,
         cutoff: float = 5000.0,
         resonance: float = 0.0,
+        waveform: str = "sine",
+        pan: float = 0.0,
+        label: str | None = None,
     ) -> None:
         """Create a musical note.
 
@@ -60,6 +64,16 @@ class Tone:
                 0 = no emphasis (flat). Higher values = boosts sound at cutoff.
                 Range: 0.0+ (typically 0-10).
 
+            waveform: Oscillator waveform type.
+                "sine" = smooth, pure tone (default).
+                "square" = digital, boxy tone with rich harmonics.
+                "sawtooth" = bright, buzzy tone with lots of harmonics.
+                "triangle" = between sine and square, slightly brighter than sine.
+
+            pan: Stereo panning position in the stereo field.
+                -1.0 = hard left. 0.0 = center (default). 1.0 = hard right.
+                Range: -1.0 to 1.0.
+
         Raises:
             ValueError: If any parameter is out of valid range.
         """
@@ -73,6 +87,8 @@ class Tone:
             release,
             cutoff,
             resonance,
+            waveform,
+            pan,
         )
 
         self.frequency = frequency
@@ -84,10 +100,23 @@ class Tone:
         self.release = release
         self.cutoff = cutoff
         self.resonance = resonance
+        self.waveform = waveform
+        self.pan = pan
+        self.label = label
 
     @staticmethod
     def _validate_all(
-        frequency, duration, volume, attack, decay, sustain, release, cutoff, resonance
+        frequency,
+        duration,
+        volume,
+        attack,
+        decay,
+        sustain,
+        release,
+        cutoff,
+        resonance,
+        waveform,
+        pan,
     ):
         """Check that all values are valid."""
         errors = []
@@ -121,6 +150,14 @@ class Tone:
         if not isinstance(resonance, (int, float)) or resonance < 0.0:
             errors.append(f"resonance must be ≥ 0.0, got {resonance}")
 
+        if waveform not in ("sine", "square", "sawtooth", "triangle"):
+            errors.append(
+                f"waveform must be 'sine', 'square', 'sawtooth', or 'triangle', got {waveform}"
+            )
+
+        if not isinstance(pan, (int, float)) or not (-1.0 <= pan <= 1.0):
+            errors.append(f"pan must be -1.0–1.0, got {pan}")
+
         if errors:
             raise ValueError("\n".join(errors))
 
@@ -139,26 +176,41 @@ class Tone:
         beat_duration = 60.0 / bpm
         return self.duration * beat_duration
 
+    def duration_seconds(self, bpm: int) -> float:
+        """Duration in seconds at the given BPM.
+
+        Alias for get_total_duration_seconds — satisfies the Renderable protocol.
+
+        Args:
+            bpm: Tempo in beats per minute.
+
+        Returns:
+            Duration in seconds: (self.duration beats) / bpm * 60.
+        """
+        return self.duration / bpm * 60
+
     def __repr__(self) -> str:
         return (
             f"Tone(frequency={self.frequency}, duration={self.duration}, "
             f"volume={self.volume}, attack={self.attack}, decay={self.decay}, "
             f"sustain={self.sustain}, release={self.release}, "
-            f"cutoff={self.cutoff}, resonance={self.resonance})"
+            f"cutoff={self.cutoff}, resonance={self.resonance}, "
+            f"waveform={self.waveform}, pan={self.pan})"
         )
 
     def render(self, bpm: int = 120, fs: int = 44100) -> np.ndarray:
-        """Generate the audio waveform for this note.
+        """Generate stereo audio waveform for this note.
 
         The envelope (attack, decay, sustain, release) is scaled to fit exactly
-        within the specified duration. No extra time is added.
+        within the specified duration. Panning is applied to create stereo output.
 
         Args:
             bpm: Tempo in beats per minute.
             fs: Sample rate (samples per second). 44100 is standard CD quality.
 
         Returns:
-            Audio data as a numpy array.
+            Stereo audio data as numpy array with shape (2, num_samples).
+            Index 0 is left channel, index 1 is right channel.
         """
         from scipy.signal import butter, sosfilt
 
@@ -168,8 +220,22 @@ class Tone:
         num_samples = int(fs * total_duration_sec)
         t = np.linspace(0, total_duration_sec, num_samples, endpoint=False)
 
-        # Generate the sine wave at the note's frequency
-        audio = np.sin(2 * np.pi * self.frequency * t)
+        # Generate the waveform based on selected waveform type
+        phase = 2 * np.pi * self.frequency * t
+
+        if self.waveform == "sine":
+            audio = np.sin(phase)
+        elif self.waveform == "square":
+            audio = np.sign(np.sin(phase))
+        elif self.waveform == "sawtooth":
+            # Sawtooth: ramp from -1 to 1
+            audio = 2 * (phase / (2 * np.pi) - np.floor(phase / (2 * np.pi) + 0.5))
+        elif self.waveform == "triangle":
+            # Triangle: piecewise linear
+            phase_norm = phase / (2 * np.pi) - np.floor(phase / (2 * np.pi) + 0.5)
+            audio = np.where(phase_norm < 0.5, 4 * phase_norm - 1, 3 - 4 * phase_norm)
+        else:
+            audio = np.sin(phase)  # Default fallback
 
         # Check if envelope times fit within duration. If not, scale them proportionally.
         envelope_time = self.attack + self.decay + self.release
@@ -227,4 +293,17 @@ class Tone:
 
         # Apply volume and envelope
         gain = 10 ** (self.volume / 20)
-        return (audio * envelope * gain).astype(np.float32)
+        mono_audio = (audio * envelope * gain).astype(np.float32)
+
+        # Apply stereo panning: linear crossfade
+        # pan = -1 (left): left_gain = 1.0, right_gain = 0.0
+        # pan = 0 (center): left_gain = 0.5, right_gain = 0.5
+        # pan = 1 (right): left_gain = 0.0, right_gain = 1.0
+        right_gain = (self.pan + 1.0) / 2.0
+        left_gain = 1.0 - right_gain
+
+        left_channel = mono_audio * left_gain
+        right_channel = mono_audio * right_gain
+
+        # Return as stereo: shape (2, num_samples)
+        return np.array([left_channel, right_channel], dtype=np.float32)

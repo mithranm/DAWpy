@@ -11,7 +11,7 @@ dependencies = [
     "soundfile>=0.12",
     "scipy>=1.2"
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 authors = [
     {name = "Mithran Mohanraj", email = "mithran.mohanraj@gmail.com"}
 ]
@@ -22,3 +22,33 @@ description = "A Digital Audio Workstation in your CLI."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+
+# Install the analysis extras with:
+#   pip install -e ".[analysis]"
+#
+# For GPU acceleration (recommended — CUDA 12.x+ required):
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130
+#   pip install -e ".[analysis]"
+#
+# The torch/torchaudio entries here pull the CPU-only builds as a fallback.
+# If you have already installed a CUDA build they will not be overwritten.
+[project.optional-dependencies]
+analysis = [
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "transformers>=4.38",
+    "accelerate"
+]
+
+# Local vibelint config for analyzing vibelint itself
+[tool.vibelint]
+include_globs = [
+    "**/*"
+]
+exclude_globs = [
+    "**/__pycache__/**",
+    "**/.*",           # dotfiles/directories (nested)
+    ".*",              # dotfiles at root level
+    "*.wav",
+    "audio/*",
+]
